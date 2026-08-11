@@ -1,5 +1,5 @@
 [build]
-  command = "unzip -o netlify-source.zip -d .netlify-build && cd .netlify-build && npm install && npm run build && cp -r dist ../dist"
+  command = "npm install && npm run build"
   publish = "dist"
 
 [[redirects]]
