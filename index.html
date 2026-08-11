@@ -7,9 +7,154 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/typescript@5.8.2/lib/typescript.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@19.0.1",
+          "react/": "https://esm.sh/react@19.0.1/",
+          "react-dom": "https://esm.sh/react-dom@19.0.1",
+          "react-dom/": "https://esm.sh/react-dom@19.0.1/",
+          "lucide-react": "https://esm.sh/lucide-react@0.468.0?external=react",
+          "firebase/": "https://esm.sh/firebase@12.17.1/",
+          "browser-image-compression": "https://esm.sh/browser-image-compression@2.0.2"
+        }
+      }
+    </script>
+    <style>
+      html,body,#root{width:100%;height:100%;margin:0;background:#0B0914;color:#fff}
+      body{font-family:'Tajawal',sans-serif}
+      #boot-error{display:none;direction:rtl;white-space:pre-wrap;background:#180b12;color:#ffb4b4;border:1px solid #7f1d1d;border-radius:14px;padding:16px;margin:24px;font:14px/1.7 monospace}
+    </style>
   </head>
-  <body class="bg-[#0B0914] text-white antialiased" style="font-family: 'Tajawal', sans-serif;">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+  <body>
+    <div id="root"><div style="min-height:100vh;display:flex;align-items:center;justify-content:center;color:#b266ff">جاري تشغيل التطبيق...</div></div>
+    <pre id="boot-error"></pre>
+
+    <script type="module">
+      const BASE = '/400basm/';
+      const cache = new Map();
+      const cssLoaded = new Set();
+
+      const showError = (err) => {
+        console.error(err);
+        const root = document.getElementById('root');
+        if (root) root.innerHTML = '';
+        const box = document.getElementById('boot-error');
+        box.style.display = 'block';
+        box.textContent = 'تعذر تشغيل التطبيق:\n' + (err?.stack || err?.message || String(err));
+      };
+
+      function normalize(path) {
+        const parts = [];
+        for (const part of path.split('/')) {
+          if (!part || part === '.') continue;
+          if (part === '..') parts.pop(); else parts.push(part);
+        }
+        return parts.join('/');
+      }
+
+      async function fetchText(path) {
+        const res = await fetch(BASE + path, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status} عند تحميل ${path}`);
+        return await res.text();
+      }
+
+      async function resolveLocal(fromPath, spec) {
+        const dir = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/') + 1) : '';
+        const raw = normalize(dir + spec);
+        const hasExt = /\.[a-zA-Z0-9]+$/.test(raw);
+        const candidates = hasExt ? [raw] : [raw + '.tsx', raw + '.ts', raw + '.jsx', raw + '.js', raw + '/index.tsx', raw + '/index.ts'];
+        for (const candidate of candidates) {
+          try {
+            const r = await fetch(BASE + candidate, { method: 'GET', cache: 'no-store' });
+            if (r.ok) return { path: candidate, source: await r.text() };
+          } catch (_) {}
+        }
+        throw new Error(`لم أجد الملف ${spec} المطلوب من ${fromPath}`);
+      }
+
+      async function injectCss(fromPath, spec) {
+        const { path, source } = await resolveLocal(fromPath, spec);
+        if (cssLoaded.has(path)) return;
+        cssLoaded.add(path);
+        let css = source.replace(/@import\s+["']tailwindcss["'];?/g, '');
+        css = css.replace(/@theme\s*\{[\s\S]*?\}/g, '');
+        const style = document.createElement('style');
+        style.textContent = css;
+        document.head.appendChild(style);
+      }
+
+      async function buildModule(path, suppliedSource) {
+        if (cache.has(path)) return cache.get(path);
+
+        const promise = (async () => {
+          let source = suppliedSource ?? await fetchText(path);
+          source = source.replaceAll('import.meta.env.BASE_URL', JSON.stringify(BASE));
+
+          const localSpecs = new Set();
+          const importRe = /(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
+          let m;
+          while ((m = importRe.exec(source))) {
+            const spec = m[1] || m[2];
+            if (spec?.startsWith('.')) localSpecs.add(spec);
+          }
+
+          const replacements = new Map();
+          for (const spec of localSpecs) {
+            if (spec.endsWith('.css')) {
+              await injectCss(path, spec);
+              replacements.set(spec, null);
+            } else {
+              const dep = await resolveLocal(path, spec);
+              const depUrl = await buildModule(dep.path, dep.source);
+              replacements.set(spec, depUrl);
+            }
+          }
+
+          const output = window.ts.transpileModule(source, {
+            compilerOptions: {
+              target: window.ts.ScriptTarget.ES2022,
+              module: window.ts.ModuleKind.ESNext,
+              jsx: window.ts.JsxEmit.ReactJSX,
+              esModuleInterop: true,
+              allowSyntheticDefaultImports: true
+            },
+            fileName: path,
+            reportDiagnostics: true
+          });
+
+          const fatal = (output.diagnostics || []).filter(d => d.category === window.ts.DiagnosticCategory.Error);
+          if (fatal.length) {
+            const text = fatal.map(d => window.ts.flattenDiagnosticMessageText(d.messageText, '\n')).join('\n');
+            throw new Error(`${path}: ${text}`);
+          }
+
+          let js = output.outputText;
+          for (const [spec, url] of replacements) {
+            if (url === null) {
+              const escaped = spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              js = js.replace(new RegExp(`import\\s+["']${escaped}["'];?`, 'g'), '');
+            } else {
+              js = js.split(`'${spec}'`).join(`'${url}'`).split(`"${spec}"`).join(`"${url}"`);
+            }
+          }
+
+          return URL.createObjectURL(new Blob([js], { type: 'text/javascript' }));
+        })();
+
+        cache.set(path, promise);
+        return promise;
+      }
+
+      try {
+        if (!window.ts) throw new Error('تعذر تحميل TypeScript compiler من CDN');
+        const entry = await buildModule('src/main.tsx');
+        await import(entry);
+      } catch (err) {
+        showError(err);
+      }
+    </script>
   </body>
 </html>
