@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() { return request.auth != null; }
+    function isOwner(userId) { return isAuthenticated() && request.auth.uid == userId; }
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && (!request.resource.data.keys().hasAny(['isPremium', 'premiumExpiresAt']) || request.auth.token.email == '1998basm1998@gmail.com' || request.resource.data.isPremium == false);
+      allow update: if isOwner(userId) && (!request.resource.data.keys().hasAny(['isPremium', 'premiumExpiresAt']) || request.auth.token.email == '1998basm1998@gmail.com' || request.resource.data.isPremium == resource.data.isPremium);
+      match /blocks/{blockedId} { allow read, write: if isOwner(userId); }
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isOwner(userId);
+        allow create: if isAuthenticated();
+      }
+    }
+    match /friendships/{friendshipId} {
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants;
+      allow update, delete: if isAuthenticated() && request.auth.uid in resource.data.participants;
+    }
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants;
+      allow update: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants && request.resource.data.senderId == request.auth.uid;
+      }
+    }
+    match /global_messages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
+    }
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+      match /members/{memberId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && (get(/databases/$(database)/documents/rooms/$(roomId)).data.ownerId == request.auth.uid || memberId == request.auth.uid);
+      }
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
+      }
+      match /entranceEvents/{eventId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "collections": {
+    "users": {"type":"document"},
+    "friendships": {"type":"document"},
+    "conversations": {"type":"document"},
+    "global_messages": {"type":"document"},
+    "rooms": {"type":"document"}
+  }
+}
